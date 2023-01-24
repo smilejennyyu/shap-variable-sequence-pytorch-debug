@@ -19,6 +19,7 @@ random_seed = 0
 # Set random seed to the specified value
 np.random.seed(random_seed)
 torch.manual_seed(random_seed)
+os.environ["CUDA_VISIBLE_DEVICES"]=""
 
 # Exceptions
 
@@ -684,7 +685,7 @@ def sort_by_seq_len(data, seq_len_dict, labels=None, id_column=0):
         Sorted list of sequence lengths, relative to the input data.
     '''
     # Get the original lengths of the sequences, for the input data
-    x_lengths = [seq_len_dict[id] for id in list(data[:, 0, id_column].numpy())]
+    x_lengths = [seq_len_dict[id] for id in list(data[:, 0, id_column].detach().cpu().numpy())]
 
     is_sorted = all(x_lengths[i] >= x_lengths[i+1] for i in range(len(x_lengths)-1))
 
@@ -976,7 +977,7 @@ def model_inference(model, seq_len_dict, dataloader=None, data=None, metrics=['l
         labels = torch.nn.utils.rnn.pack_padded_sequence(labels, x_lengths, batch_first=True)
         labels, _ = torch.nn.utils.rnn.pad_packed_sequence(labels, batch_first=True, padding_value=padding_value)
 
-        mask = (labels <= 1).view_as(scores).float()                    # Create a mask by filtering out all labels that are not a padding value
+        mask = (labels <= 1).contiguous().view_as(scores).float()                    # Create a mask by filtering out all labels that are not a padding value
         unpadded_labels = torch.masked_select(labels.contiguous().view_as(scores), mask.byte()) # Completely remove the padded values from the labels using the mask
         unpadded_scores = torch.masked_select(scores, mask.byte())      # Completely remove the padded values from the scores using the mask
         pred = torch.round(unpadded_scores)                             # Get the predictions
@@ -1009,7 +1010,7 @@ def model_inference(model, seq_len_dict, dataloader=None, data=None, metrics=['l
             correct_pred = pred == unpadded_labels                          # Get the correct predictions
             metrics_vals['accuracy'] = torch.mean(correct_pred.type(torch.FloatTensor)).item() # Add the accuracy of the current batch, ignoring all padding values
         if 'AUC' in metrics:
-            metrics_vals['AUC'] = roc_auc_score(unpadded_labels.numpy(), unpadded_scores.detach().numpy()) # Add the ROC AUC of the current batch
+            metrics_vals['AUC'] = roc_auc_score(unpadded_labels.detach().numpy(), unpadded_scores.detach().numpy()) # Add the ROC AUC of the current batch
         if 'precision' in metrics:
             curr_prec = true_pos / (true_pos + false_pos)
             metrics_vals['precision'] = curr_prec                           # Add the precision of the current batch
@@ -1048,7 +1049,7 @@ def model_inference(model, seq_len_dict, dataloader=None, data=None, metrics=['l
             labels = torch.nn.utils.rnn.pack_padded_sequence(labels, x_lengths, batch_first=True)
             labels, _ = torch.nn.utils.rnn.pad_packed_sequence(labels, batch_first=True, padding_value=padding_value)
 
-            mask = (labels <= 1).view_as(scores).float()                    # Create a mask by filtering out all labels that are not a padding value
+            mask = (labels <= 1).contiguous().view_as(scores).float()                    # Create a mask by filtering out all labels that are not a padding value
             unpadded_labels = torch.masked_select(labels.contiguous().view_as(scores), mask.byte()) # Completely remove the padded values from the labels using the mask
             unpadded_scores = torch.masked_select(scores, mask.byte())      # Completely remove the padded values from the scores using the mask
             pred = torch.round(unpadded_scores)                             # Get the predictions
@@ -1080,7 +1081,7 @@ def model_inference(model, seq_len_dict, dataloader=None, data=None, metrics=['l
                 correct_pred = pred == unpadded_labels                      # Get the correct predictions
                 acc += torch.mean(correct_pred.type(torch.FloatTensor))     # Add the accuracy of the current batch, ignoring all padding values
             if 'AUC' in metrics:
-                auc += roc_auc_score(unpadded_labels.numpy(), unpadded_scores.detach().numpy()) # Add the ROC AUC of the current batch
+                auc += roc_auc_score(unpadded_labels.detach().numpy(), unpadded_scores.detach().numpy()) # Add the ROC AUC of the current batch
             if 'precision' in metrics:
                 curr_prec = true_pos / (true_pos + false_pos)
                 prec += curr_prec                                           # Add the precision of the current batch
@@ -1184,11 +1185,15 @@ def train(model, train_dataloader, val_dataloader, seq_len_dict,
         # Loop through the training data
         for features, labels in train_dataloader:
             model.train()                                                   # Activate dropout to train the model
+            torch.cuda.is_available = lambda : False
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model = model.to(device)
             optimizer.zero_grad()                                           # Clear the gradients of all optimized variables
 
             if train_on_gpu:
                 features, labels = features.cuda(), labels.cuda()           # Move data to GPU
-
+                # x_lengths = torch.from_numpy(np.array(x_lengths)).cuda()
+            
             features, labels = features.float(), labels.float()             # Make the data have type float instead of double, as it would cause problems
             features, labels, x_lengths = sort_by_seq_len(features, seq_len_dict, labels) # Sort the data by sequence length
             scores = model.forward(features[:, :, 2:], x_lengths)           # Feedforward the data through the model
@@ -1203,13 +1208,13 @@ def train(model, train_dataloader, val_dataloader, seq_len_dict,
             loss.backward()                                                 # Backpropagate the loss
             optimizer.step()                                                # Update the model's weights
             train_loss += loss                                              # Add the training loss of the current batch
-            mask = (labels <= 1).view_as(scores).float()                    # Create a mask by filtering out all labels that are not a padding value
+            mask = (labels <= 1).contiguous().view_as(scores).float()                    # Create a mask by filtering out all labels that are not a padding value
             unpadded_labels = torch.masked_select(labels.contiguous().view_as(scores), mask.byte()) # Completely remove the padded values from the labels using the mask
             unpadded_scores = torch.masked_select(scores, mask.byte())      # Completely remove the padded values from the scores using the mask
             pred = torch.round(unpadded_scores)                             # Get the predictions
             correct_pred = pred == unpadded_labels                          # Get the correct predictions
             train_acc += torch.mean(correct_pred.type(torch.FloatTensor))   # Add the training accuracy of the current batch, ignoring all padding values
-            train_auc += roc_auc_score(unpadded_labels.numpy(), unpadded_scores.detach().numpy()) # Add the training ROC AUC of the current batch
+            train_auc += roc_auc_score(unpadded_labels.detach().cpu().numpy(), unpadded_scores.detach().cpu().numpy()) # Add the training ROC AUC of the current batch
             step += 1                                                       # Count one more iteration step
             model.eval()                                                    # Deactivate dropout to test the model
 
@@ -1233,13 +1238,13 @@ def train(model, train_dataloader, val_dataloader, seq_len_dict,
                     labels, _ = torch.nn.utils.rnn.pad_packed_sequence(labels, batch_first=True, padding_value=padding_value)
 
                     val_loss += model.loss(scores, labels, x_lengths)               # Calculate and add the validation loss of the current batch
-                    mask = (labels <= 1).view_as(scores).float()                    # Create a mask by filtering out all labels that are not a padding value
+                    mask = (labels <= 1).contiguous().view_as(scores).float()                    # Create a mask by filtering out all labels that are not a padding value
                     unpadded_labels = torch.masked_select(labels.contiguous().view_as(scores), mask.byte()) # Completely remove the padded values from the labels using the mask
                     unpadded_scores = torch.masked_select(scores, mask.byte())      # Completely remove the padded values from the scores using the mask
                     pred = torch.round(unpadded_scores)                             # Get the predictions
                     correct_pred = pred == unpadded_labels                          # Get the correct predictions
                     val_acc += torch.mean(correct_pred.type(torch.FloatTensor))     # Add the validation accuracy of the current batch, ignoring all padding values
-                    val_auc += roc_auc_score(unpadded_labels.numpy(), unpadded_scores.detach().numpy()) # Add the validation ROC AUC of the current batch
+                    val_auc += roc_auc_score(unpadded_labels.detach().numpy(), unpadded_scores.detach().numpy()) # Add the validation ROC AUC of the current batch
 
             # Calculate the average of the metrics over the batches
             val_loss = val_loss / len(val_dataloader)

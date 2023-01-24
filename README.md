@@ -1,5 +1,6 @@
 # shap-variable-sequence-pytorch-debug
 
-Install all packages on requirements.txt.
+Install all packages on requirements.txt. Run `pip install -r requirements.txt`. If `shap` is not working, just `pip install -e git+https://github.com/AndreCNF/shap.git@f0777334bd82a1bacad578eaf1931c3ecbf40ec6#egg=shap`.
 
-Link to my adapted version of SHAP: https://github.com/AndreCNF/shap.git
+Reference: https://towardsdatascience.com/interpreting-recurrent-neural-networks-on-multivariate-time-series-ebec0edb8f5a
+
